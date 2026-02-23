@@ -1,0 +1,116 @@
+services:
+  # MariaDB para GLPI
+  scram-glpi-db:
+    image: mariadb:10.11
+    container_name: scram-glpi-db
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD:-changeme_root}
+      - MARIADB_DATABASE=${MARIADB_DATABASE:-glpi}
+      - MARIADB_USER=${MARIADB_USER:-glpi_user}
+      - MARIADB_PASSWORD=${MARIADB_PASSWORD:-changeme_glpi}
+    volumes:
+      - scram-glpi-db-data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - scram-glpi-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # GLPI Application
+  scram-glpi-app:
+    image: diouxx/glpi:latest
+    container_name: scram-glpi-app
+    restart: unless-stopped
+    depends_on:
+      scram-glpi-db:
+        condition: service_healthy
+    environment:
+      - TIMEZONE=America/Mexico_City
+    volumes:
+      - scram-glpi-data:/var/www/html/glpi
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.scram-glpi.rule=Host(`glpi.scram2k.com`)"
+      - "traefik.http.routers.scram-glpi.entrypoints=websecure"
+      - "traefik.http.routers.scram-glpi.tls.certresolver=letsencrypt"
+      - "traefik.http.services.scram-glpi.loadbalancer.server.port=80"
+    networks:
+      - traefik
+      - scram-glpi-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # React Frontend (Helpdesk)
+  scram-helpdesk-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - VITE_GLPI_URL=${VITE_GLPI_URL:-https://glpi.scram2k.com}
+        - VITE_GLPI_APP_TOKEN=${VITE_GLPI_APP_TOKEN:-}
+        - VITE_GLPI_USER_TOKEN=${VITE_GLPI_USER_TOKEN:-}
+    container_name: scram-helpdesk-frontend
+    restart: unless-stopped
+    depends_on:
+      scram-glpi-app:
+        condition: service_healthy
+    environment:
+      - VITE_GLPI_URL=${VITE_GLPI_URL:-https://glpi.scram2k.com}
+      - VITE_GLPI_APP_TOKEN=${VITE_GLPI_APP_TOKEN:-}
+      - VITE_GLPI_USER_TOKEN=${VITE_GLPI_USER_TOKEN:-}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.scram-helpdesk.rule=Host(`soporte.scram2k.com`)"
+      - "traefik.http.routers.scram-helpdesk.entrypoints=websecure"
+      - "traefik.http.routers.scram-helpdesk.tls.certresolver=letsencrypt"
+      - "traefik.http.services.scram-helpdesk.loadbalancer.server.port=80"
+    networks:
+      - traefik
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  scram-glpi-db-data:
+  scram-glpi-data:
+
+networks:
+  traefik:
+    external: true
+  scram-glpi-internal:
+    driver: bridge
