@@ -47,6 +47,7 @@ services:
       - "traefik.http.routers.scram-glpi.entrypoints=websecure"
       - "traefik.http.routers.scram-glpi.tls.certresolver=letsencrypt"
       - "traefik.http.services.scram-glpi.loadbalancer.server.port=80"
+      - "traefik.docker.network=traefik"
     networks:
       - traefik
       - scram-glpi-internal
