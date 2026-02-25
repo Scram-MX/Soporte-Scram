@@ -41,6 +41,11 @@ import {
   Target,
   TrendingUp,
   AlertTriangle,
+  Phone,
+  Globe,
+  Smartphone,
+  FileSpreadsheet,
+  Monitor,
 } from 'lucide-react';
 
 export default function TicketDetail() {
@@ -65,6 +70,8 @@ export default function TicketDetail() {
 
   // Estados para asignación
   const [technicians, setTechnicians] = useState([]);
+  const [allTechnicians, setAllTechnicians] = useState([]);
+  const [groupTechniciansMap, setGroupTechniciansMap] = useState({});
   const [groups, setGroups] = useState([]);
   const [selectedTechnician, setSelectedTechnician] = useState('');
   const [selectedGroup, setSelectedGroup] = useState('');
@@ -74,7 +81,22 @@ export default function TicketDetail() {
   const [newComment, setNewComment] = useState('');
   const [commentType, setCommentType] = useState('followup'); // followup, solution
   const [isPrivate, setIsPrivate] = useState(false);
-  const [sendNotification, setSendNotification] = useState(true); // Notificar por correo por defecto
+
+  // Función para forzar el envío de correos pendientes
+  const triggerEmailQueue = async () => {
+    try {
+      // Llamar al cron de GLPI para procesar la cola de correos
+      await fetch('https://glpi.scram2k.com/front/cron.php', {
+        mode: 'no-cors',
+        cache: 'no-cache'
+      });
+      // Llamar varias veces para asegurar procesamiento
+      setTimeout(() => fetch('https://glpi.scram2k.com/front/cron.php', { mode: 'no-cors' }), 2000);
+      setTimeout(() => fetch('https://glpi.scram2k.com/front/cron.php', { mode: 'no-cors' }), 5000);
+    } catch (e) {
+      console.log('Cron triggered');
+    }
+  };
 
   // Estado para información del solicitante
   const [requesterInfo, setRequesterInfo] = useState(null);
@@ -88,8 +110,16 @@ export default function TicketDetail() {
   // Estado para SLA
   const [slaInfo, setSlaInfo] = useState(null);
 
+  // Cache de nombres de usuarios para el timeline
+  const [usersCache, setUsersCache] = useState({});
+
+  // Estado para verificar si el usuario actual está asignado al ticket
+  const [isAssignedToMe, setIsAssignedToMe] = useState(false);
+
   const canAssign = isAdmin || isTechnician;
   const canEdit = isAdmin || isTechnician;
+  // Solo puede resolver/cerrar si es admin O si está asignado al ticket
+  const canResolve = isAdmin || isAssignedToMe;
 
   // Cargar ticket y datos relacionados
   const fetchTicket = useCallback(async () => {
@@ -102,7 +132,31 @@ export default function TicketDetail() {
       ]);
 
       setTicket(ticketData);
-      setFollowups(Array.isArray(followupsData) ? followupsData : []);
+      const followupsList = Array.isArray(followupsData) ? followupsData : [];
+      setFollowups(followupsList);
+
+      // Cargar nombres de usuarios para el timeline
+      const userIds = [...new Set(followupsList.map(f => f.users_id).filter(Boolean))];
+      if (userIds.length > 0) {
+        const usersData = {};
+        await Promise.all(
+          userIds.map(async (userId) => {
+            try {
+              const userData = await glpiApi.getUser(userId);
+              if (userData) {
+                // Obtener nombre legible: realname + firstname, o name, o glpiname
+                const displayName = userData.realname
+                  ? `${userData.realname} ${userData.firstname || ''}`.trim()
+                  : userData.name || `Usuario #${userId}`;
+                usersData[userId] = displayName;
+              }
+            } catch (e) {
+              usersData[userId] = `Usuario #${userId}`;
+            }
+          })
+        );
+        setUsersCache(prev => ({ ...prev, ...usersData }));
+      }
 
       // Preparar datos de edición
       setEditData({
@@ -126,17 +180,34 @@ export default function TicketDetail() {
       const sla = await glpiApi.getTicketSLA(id);
       setSlaInfo(sla);
 
-      // Cargar asignaciones actuales (solo si puede asignar)
+      // Cargar asignaciones actuales
+      const assignees = await glpiApi.getTicketAssignees(id);
+      setCurrentAssignees(assignees);
+
+      // Verificar si el usuario actual está asignado al ticket (type=2 es técnico asignado)
+      const currentUserId = user?.glpiID;
+      const assignedUsers = assignees.users?.filter(u => u.type === 2) || [];
+      const userIsAssigned = assignedUsers.some(u => Number(u.users_id) === Number(currentUserId));
+      setIsAssignedToMe(userIsAssigned);
+      console.log('👤 Usuario actual:', currentUserId, '¿Asignado?:', userIsAssigned);
+
+      // Filtrar técnicos si hay grupo asignado
       if (canAssign) {
-        const assignees = await glpiApi.getTicketAssignees(id);
-        setCurrentAssignees(assignees);
+        const currentGroup = assignees.groups.find(a => a.type === 2);
+        if (currentGroup && groupTechniciansMap[Number(currentGroup.groups_id)]) {
+          const techIds = groupTechniciansMap[Number(currentGroup.groups_id)];
+          const filteredTechs = allTechnicians.filter(t => techIds.includes(Number(t.id)));
+          if (filteredTechs.length > 0) {
+            setTechnicians(filteredTechs);
+          }
+        }
       }
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [id, canAssign]);
+  }, [id, canAssign, user]);
 
   // Manejar drag and drop de archivos
   const handleDrag = (e) => {
@@ -197,12 +268,16 @@ export default function TicketDetail() {
   const fetchAssignmentOptions = useCallback(async () => {
     if (!canAssign) return;
     try {
-      const [techData, groupData] = await Promise.all([
+      const [techData, groupData, groupMapData] = await Promise.all([
         glpiApi.getTechnicians().catch(() => []),
         glpiApi.getGroups().catch(() => []),
+        glpiApi.getGroupTechniciansMap().catch(() => ({})),
       ]);
-      setTechnicians(Array.isArray(techData) ? techData : []);
+      const techList = Array.isArray(techData) ? techData : [];
+      setAllTechnicians(techList);
+      setTechnicians(techList);
       setGroups(Array.isArray(groupData) ? groupData : []);
+      setGroupTechniciansMap(groupMapData || {});
     } catch (err) {
       console.error('Error fetching assignment options:', err);
     }
@@ -264,7 +339,7 @@ Mesa de Ayuda - SCRAM
     window.open(mailtoUrl, '_blank');
   };
 
-  // Agregar seguimiento/nota
+  // Agregar seguimiento/nota - AUTOMÁTICO sin preguntas
   const handleAddComment = async (e) => {
     e.preventDefault();
     if (!newComment.trim() && attachedFiles.length === 0) return;
@@ -290,22 +365,17 @@ Mesa de Ayuda - SCRAM
           // Agregar solución y cambiar estado a Resuelto
           await glpiApi.addTicketFollowup(id, `[SOLUCIÓN] ${newComment}`);
           await glpiApi.updateTicket(id, { status: 5 }); // 5 = Resuelto
-          setSuccess('Solución agregada y ticket marcado como resuelto');
+          setSuccess('Solución agregada - Notificación enviada automáticamente');
         } else {
           // Agregar seguimiento normal
           const prefix = isPrivate ? '[PRIVADO] ' : '';
           await glpiApi.addTicketFollowup(id, `${prefix}${newComment}`);
-          setSuccess('Nota agregada correctamente');
+          setSuccess(isPrivate ? 'Nota privada agregada' : 'Nota agregada - Notificación enviada automáticamente');
         }
 
-        // Obtener email del solicitante
-        const email = requesterInfo?.email ||
-          (requesterInfo?.name?.includes('@') ? requesterInfo.name : null);
-
-        // Abrir correo automáticamente si está activada la notificación y no es privado
-        if (sendNotification && !isPrivate && email) {
-          openEmailClient(newComment, isSolution);
-          setSuccess(prev => prev + ' - Se abrió el correo para enviar notificación');
+        // Forzar envío de correos automáticamente (GLPI los encola, esto fuerza el envío)
+        if (!isPrivate) {
+          triggerEmailQueue();
         }
       } else {
         setSuccess('Archivos adjuntados correctamente');
@@ -402,9 +472,12 @@ Mesa de Ayuda - SCRAM
         await glpiApi.addTicketFollowup(id, msg);
       }
 
+      // Forzar envío de notificaciones
+      triggerEmailQueue();
+
       setSelectedTechnician('');
       setSelectedGroup('');
-      setSuccess('Asignación agregada correctamente');
+      setSuccess('Asignación agregada - Notificación enviada');
       fetchTicket();
     } catch (err) {
       setError(err.message);
@@ -491,39 +564,10 @@ Mesa de Ayuda - SCRAM
       const followupMessage = `${userName} cambió el estado de "${oldStatusName}" a "${newStatusName}"`;
       await glpiApi.addTicketFollowup(id, `[CAMBIO DE ESTADO] ${followupMessage}`);
 
-      setSuccess(`Estado cambiado a: ${newStatusName}`);
+      setSuccess(`Estado cambiado a: ${newStatusName} - Notificación enviada automáticamente`);
 
-      // Enviar notificación por correo automáticamente si hay email
-      if (requesterInfo?.email) {
-        const isSolved = newStatus === 5 || newStatus === 6;
-        const subject = `${isSolved ? '[RESUELTO]' : '[Actualización]'} Ticket #${id} - ${ticket?.name || ''}`;
-        const body = `
-Estimado(a) ${requesterInfo?.realname || requesterInfo?.firstname || 'Usuario'},
-
-El estado de su ticket ha sido actualizado.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TICKET #${id}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Asunto: ${ticket?.name || ''}
-
-NUEVO ESTADO: ${newStatusName}
-Estado anterior: ${oldStatusName}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-${isSolved ? 'Su ticket ha sido marcado como resuelto. Si tiene alguna duda o el problema persiste, por favor responda a este correo.' : 'Puede consultar el estado de su ticket en el portal o responder a este correo.'}
-
-Portal: ${window.location.origin}/tickets/${id}
-
-Atentamente,
-${user?.glpifriendlyname || user?.glpiname || 'Equipo de Soporte'}
-Mesa de Ayuda - SCRAM
-        `.trim();
-
-        const mailtoUrl = `mailto:${requesterInfo.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-        window.open(mailtoUrl, '_blank');
-      }
+      // Forzar envío de correos automáticamente
+      triggerEmailQueue();
 
       fetchTicket();
     } catch (err) {
@@ -582,6 +626,34 @@ Mesa de Ayuda - SCRAM
     return urgencyMap[urgency] || 'Media';
   };
 
+  // Detectar origen del ticket por el contenido
+  const getTicketOrigin = (ticketData) => {
+    if (!ticketData) return null;
+    const content = ticketData.content || '';
+
+    if (content.includes('[ORIGEN:Smartsheet]')) {
+      return { label: 'Smartsheet', class: 'origin-smartsheet', icon: FileSpreadsheet };
+    }
+    if (content.includes('[ORIGEN:Portal]')) {
+      return { label: 'Portal', class: 'origin-portal', icon: Monitor };
+    }
+    if (content.includes('[ORIGEN:Correo]')) {
+      return { label: 'Correo', class: 'origin-email', icon: Mail };
+    }
+    if (content.includes('[ORIGEN:WhatsApp]')) {
+      return { label: 'WhatsApp', class: 'origin-whatsapp', icon: Smartphone };
+    }
+    return null; // Origen desconocido o no marcado
+  };
+
+  // Extraer ID de Smartsheet del título
+  const getSmartsheetId = (ticketData) => {
+    if (!ticketData) return null;
+    const name = ticketData.name || '';
+    const match = name.match(/\[SS-(\d+)\]/);
+    return match ? match[1] : null;
+  };
+
   // Loading state
   if (loading) {
     return (
@@ -608,6 +680,8 @@ Mesa de Ayuda - SCRAM
 
   const status = getStatusLabel(ticket.status);
   const priority = getPriorityLabel(ticket.priority);
+  const origin = getTicketOrigin(ticket);
+  const smartsheetId = getSmartsheetId(ticket);
 
   return (
     <div className="page-container ticket-detail-page">
@@ -619,6 +693,18 @@ Mesa de Ayuda - SCRAM
           </button>
           <h1>Ticket #{ticket.id}</h1>
           <span className={`badge ${status.class}`}>{status.label}</span>
+          {origin && (
+            <span className={`badge ${origin.class}`}>
+              <origin.icon size={12} />
+              {origin.label}
+            </span>
+          )}
+          {smartsheetId && (
+            <span className="badge origin-smartsheet" title="ID de Smartsheet">
+              <FileSpreadsheet size={12} />
+              SS-{smartsheetId}
+            </span>
+          )}
         </div>
         <div className="header-actions">
           <button onClick={fetchTicket} className="btn btn-icon" title="Actualizar">
@@ -870,7 +956,7 @@ Mesa de Ayuda - SCRAM
                             </span>
                             <span className="timeline-user">
                               <User size={12} />
-                              Usuario #{followup.users_id}
+                              {usersCache[followup.users_id] || `Usuario #${followup.users_id}`}
                             </span>
                           </div>
                           <span className="timeline-date">
@@ -958,11 +1044,7 @@ Mesa de Ayuda - SCRAM
                     <input
                       type="checkbox"
                       checked={isPrivate}
-                      onChange={(e) => {
-                        setIsPrivate(e.target.checked);
-                        // Si es privado, desactivar notificación
-                        if (e.target.checked) setSendNotification(false);
-                      }}
+                      onChange={(e) => setIsPrivate(e.target.checked)}
                     />
                     <Lock size={14} />
                     Nota privada
@@ -1028,44 +1110,19 @@ Mesa de Ayuda - SCRAM
                 </div>
               )}
 
-              {/* Opciones de notificación */}
-              {!isPrivate && requesterInfo?.email && (
-                <div className="notification-options">
-                  <label className="notification-toggle">
-                    <input
-                      type="checkbox"
-                      checked={sendNotification}
-                      onChange={(e) => setSendNotification(e.target.checked)}
-                    />
-                    <Mail size={14} />
-                    Enviar correo al cliente
-                  </label>
-                  <span className="notification-help">
-                    Se abrirá tu correo con el mensaje listo para enviar a: <strong>{requesterInfo.email}</strong>
+              {/* Info de notificación automática */}
+              {!isPrivate && (
+                <div className="notification-auto-info">
+                  <Bell size={14} />
+                  <span>
+                    {requesterInfo?.email
+                      ? `Notificación automática a: ${requesterInfo.email}`
+                      : 'Sin correo registrado - No se enviará notificación'}
                   </span>
                 </div>
               )}
 
-              {/* Aviso si no hay correo */}
-              {!isPrivate && !requesterInfo?.email && canEdit && (
-                <div className="notification-warning">
-                  <AlertCircle size={14} />
-                  El solicitante no tiene correo registrado. No se podrá notificar por email.
-                </div>
-              )}
-
               <div className="followup-form-actions">
-                {/* Botón para abrir correo manualmente */}
-                {!isPrivate && requesterInfo?.email && newComment.trim() && (
-                  <a
-                    href={`mailto:${requesterInfo.email}?subject=Re: Ticket #${id} - ${ticket?.name || ''}&body=${encodeURIComponent(newComment)}`}
-                    className="btn btn-secondary"
-                    title="Enviar por correo manualmente"
-                  >
-                    <ExternalLink size={16} />
-                    Abrir en correo
-                  </a>
-                )}
                 <button
                   type="submit"
                   className={`btn ${commentType === 'solution' ? 'btn-success' : 'btn-primary'}`}
@@ -1075,10 +1132,8 @@ Mesa de Ayuda - SCRAM
                   {submitting
                     ? 'Enviando...'
                     : commentType === 'solution'
-                    ? 'Agregar Solución'
-                    : sendNotification && requesterInfo?.email
-                    ? 'Agregar y Notificar'
-                    : 'Agregar Nota'}
+                    ? 'Resolver Ticket'
+                    : 'Enviar Seguimiento'}
                 </button>
               </div>
             </form>
@@ -1112,7 +1167,7 @@ Mesa de Ayuda - SCRAM
                     En Espera
                   </button>
                 )}
-                {ticket.status !== 5 && (
+                {ticket.status !== 5 && canResolve && (
                   <button
                     onClick={() => handleQuickStatusChange(5)}
                     className="btn btn-sm btn-success"
@@ -1122,7 +1177,7 @@ Mesa de Ayuda - SCRAM
                     Resolver
                   </button>
                 )}
-                {ticket.status !== 6 && (
+                {ticket.status !== 6 && canResolve && (
                   <button
                     onClick={() => handleQuickStatusChange(6)}
                     className="btn btn-sm btn-secondary"
@@ -1242,10 +1297,10 @@ Mesa de Ayuda - SCRAM
           )}
 
           {/* Información del solicitante */}
-          <div className="sidebar-section requester-section">
+          <div className="sidebar-section requester-section requester-highlight">
             <h4>
               <User size={16} />
-              Solicitante
+              Información de Solicitante
             </h4>
             {(() => {
               // Obtener email: del campo email, o del nombre si parece email
@@ -1272,7 +1327,8 @@ Mesa de Ayuda - SCRAM
                     )}
                     {requesterInfo?.phone && (
                       <div className="requester-phone">
-                        <span>Tel: {requesterInfo.phone}</span>
+                        <Phone size={14} />
+                        <span>{requesterInfo.phone}</span>
                       </div>
                     )}
                   </div>
@@ -1312,135 +1368,181 @@ Mesa de Ayuda - SCRAM
             })()}
           </div>
 
-          {/* Técnicos asignados */}
-          {canAssign && (
-            <div className="sidebar-section">
-              <h4>
-                <User size={16} />
-                Técnicos Asignados
-              </h4>
-              {currentAssignees.users.length > 0 ? (
-                <div className="assignees-list">
-                  {currentAssignees.users
-                    .filter((a) => a.type === 2) // type 2 = asignado
-                    .map((assignment) => (
-                      <div key={assignment.id} className="assignee-item">
-                        <User size={14} />
-                        <span>
-                          {technicians.find((t) => t.id === assignment.users_id)?.name ||
-                            `Usuario #${assignment.users_id}`}
-                        </span>
-                        <button
-                          onClick={() => handleRemoveUserAssignment(assignment.id, assignment.users_id)}
-                          className="btn-remove"
-                          title="Quitar asignación"
-                          disabled={assigning}
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              ) : (
-                <p className="no-assignees">Sin técnico asignado</p>
-              )}
-
-              {/* Agregar técnico */}
-              <div className="add-assignee">
-                <select
-                  value={selectedTechnician}
-                  onChange={(e) => setSelectedTechnician(e.target.value)}
-                >
-                  <option value="">-- Agregar técnico --</option>
-                  {technicians
-                    .filter(
-                      (t) =>
-                        !currentAssignees.users.some(
-                          (a) => a.users_id === t.id && a.type === 2
-                        )
-                    )
-                    .map((tech) => (
-                      <option key={tech.id} value={tech.id}>
-                        {tech.name} {tech.realname ? `(${tech.realname})` : ''}
-                      </option>
-                    ))}
-                </select>
-                {selectedTechnician && (
-                  <button
-                    onClick={handleAddAssignment}
-                    className="btn btn-sm btn-primary"
-                    disabled={assigning}
-                  >
-                    <UserPlus size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Grupos asignados */}
+          {/* Grupo asignado */}
           {canAssign && (
             <div className="sidebar-section">
               <h4>
                 <Users size={16} />
-                Grupos Asignados
+                Grupo Asignado
               </h4>
-              {currentAssignees.groups.length > 0 ? (
-                <div className="assignees-list">
-                  {currentAssignees.groups
-                    .filter((a) => a.type === 2) // type 2 = asignado
-                    .map((assignment) => (
-                      <div key={assignment.id} className="assignee-item">
-                        <Users size={14} />
-                        <span>
-                          {groups.find((g) => g.id === assignment.groups_id)?.name ||
-                            `Grupo #${assignment.groups_id}`}
-                        </span>
-                        <button
-                          onClick={() => handleRemoveGroupAssignment(assignment.id, assignment.groups_id)}
-                          className="btn-remove"
-                          title="Quitar asignación"
-                          disabled={assigning}
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              ) : (
-                <p className="no-assignees">Sin grupo asignado</p>
-              )}
+              {(() => {
+                const currentGroup = currentAssignees.groups.find((a) => a.type === 2);
+                const currentGroupId = currentGroup?.groups_id || '';
 
-              {/* Agregar grupo */}
-              <div className="add-assignee">
-                <select
-                  value={selectedGroup}
-                  onChange={(e) => setSelectedGroup(e.target.value)}
-                >
-                  <option value="">-- Agregar grupo --</option>
-                  {groups
-                    .filter(
-                      (g) =>
-                        !currentAssignees.groups.some(
-                          (a) => a.groups_id === g.id && a.type === 2
-                        )
-                    )
-                    .map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.name}
+                return (
+                  <div className="single-assignee">
+                    <select
+                      value={currentGroupId}
+                      onChange={async (e) => {
+                        const newGroupId = e.target.value;
+                        if (newGroupId === String(currentGroupId)) return;
+
+                        setAssigning(true);
+                        try {
+                          // Remover grupo actual si existe
+                          if (currentGroup) {
+                            await glpiApi.removeTicketGroupAssignment(currentGroup.id);
+                          }
+
+                          let newGroupAssignment = null;
+
+                          // Asignar nuevo grupo si se seleccionó uno
+                          if (newGroupId) {
+                            const result = await glpiApi.assignTicketToGroup(id, parseInt(newGroupId, 10));
+                            const groupName = groups.find(g => g.id === parseInt(newGroupId, 10))?.name || `Grupo #${newGroupId}`;
+                            await glpiApi.addTicketFollowup(id, `[ASIGNACIÓN] ${user?.glpiname || 'Sistema'} asignó el ticket al grupo: ${groupName}`);
+
+                            // Crear nuevo objeto de asignación para actualizar estado local
+                            newGroupAssignment = {
+                              id: result?.id || Date.now(),
+                              groups_id: parseInt(newGroupId, 10),
+                              type: 2,
+                            };
+
+                            // Filtrar técnicos por el nuevo grupo
+                            const groupId = parseInt(newGroupId, 10);
+                            if (groupTechniciansMap[groupId]) {
+                              const techIds = groupTechniciansMap[groupId];
+                              const filteredTechs = allTechnicians.filter(t => techIds.includes(Number(t.id)));
+                              setTechnicians(filteredTechs);
+                            } else {
+                              setTechnicians(allTechnicians);
+                            }
+                          } else {
+                            // Sin grupo, mostrar todos los técnicos
+                            setTechnicians(allTechnicians);
+                          }
+
+                          // Actualizar estado local sin recargar toda la página
+                          setCurrentAssignees(prev => ({
+                            ...prev,
+                            groups: newGroupAssignment
+                              ? [...prev.groups.filter(g => g.type !== 2), newGroupAssignment]
+                              : prev.groups.filter(g => g.type !== 2),
+                          }));
+
+                          setSuccess(newGroupId ? 'Grupo asignado' : 'Grupo removido');
+                        } catch (err) {
+                          setError(err.message);
+                        } finally {
+                          setAssigning(false);
+                        }
+                      }}
+                      disabled={assigning}
+                      className="single-select"
+                    >
+                      <option value="">-- Sin grupo --</option>
+                      {groups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Técnico asignado */}
+          {canAssign && (
+            <div className="sidebar-section">
+              <h4>
+                <User size={16} />
+                Técnico Asignado
+                {(() => {
+                  const currentGroup = currentAssignees.groups.find(a => a.type === 2);
+                  if (currentGroup && technicians.length < allTechnicians.length) {
+                    return (
+                      <span style={{ fontSize: '11px', color: '#666', marginLeft: 8, fontWeight: 'normal' }}>
+                        ({technicians.length} del grupo)
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
+              </h4>
+              {(() => {
+                const currentTech = currentAssignees.users.find((a) => a.type === 2);
+                const currentTechId = currentTech?.users_id || '';
+                const currentGroup = currentAssignees.groups.find(a => a.type === 2);
+                const hasGroupFilter = currentGroup && technicians.length < allTechnicians.length;
+
+                return (
+                  <div className="single-assignee">
+                    <select
+                      value={currentTechId}
+                      onChange={async (e) => {
+                        const newTechId = e.target.value;
+                        if (newTechId === String(currentTechId)) return;
+
+                        setAssigning(true);
+                        try {
+                          // Remover técnico actual si existe
+                          if (currentTech) {
+                            await glpiApi.removeTicketUserAssignment(currentTech.id);
+                          }
+
+                          let newTechAssignment = null;
+
+                          // Asignar nuevo técnico si se seleccionó uno
+                          if (newTechId) {
+                            const result = await glpiApi.assignTicketToUser(id, parseInt(newTechId, 10));
+                            const techName = technicians.find(t => t.id === parseInt(newTechId, 10))?.name || `Usuario #${newTechId}`;
+                            await glpiApi.addTicketFollowup(id, `[ASIGNACIÓN] ${user?.glpiname || 'Sistema'} asignó el ticket al técnico: ${techName}`);
+
+                            // Crear nuevo objeto de asignación para actualizar estado local
+                            newTechAssignment = {
+                              id: result?.id || Date.now(),
+                              users_id: parseInt(newTechId, 10),
+                              type: 2,
+                            };
+                          }
+
+                          // Actualizar estado local sin recargar toda la página
+                          setCurrentAssignees(prev => ({
+                            ...prev,
+                            users: newTechAssignment
+                              ? [...prev.users.filter(u => u.type !== 2), newTechAssignment]
+                              : prev.users.filter(u => u.type !== 2),
+                          }));
+
+                          setSuccess(newTechId ? 'Técnico asignado' : 'Técnico removido');
+                        } catch (err) {
+                          setError(err.message);
+                        } finally {
+                          setAssigning(false);
+                        }
+                      }}
+                      disabled={assigning}
+                      className="single-select"
+                    >
+                      <option value="">
+                        {hasGroupFilter
+                          ? technicians.length > 0
+                            ? '-- Seleccionar técnico del grupo --'
+                            : '-- No hay técnicos en este grupo --'
+                          : '-- Sin técnico --'}
                       </option>
-                    ))}
-                </select>
-                {selectedGroup && (
-                  <button
-                    onClick={handleAddAssignment}
-                    className="btn btn-sm btn-primary"
-                    disabled={assigning}
-                  >
-                    <UserPlus size={14} />
-                  </button>
-                )}
-              </div>
+                      {technicians.map((tech) => (
+                        <option key={tech.id} value={tech.id}>
+                          {tech.name} {tech.realname ? `(${tech.realname})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

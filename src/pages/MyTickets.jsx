@@ -10,9 +10,7 @@ import {
   CheckCircle,
   AlertCircle,
   Search,
-  Filter,
   X,
-  Info,
 } from 'lucide-react';
 
 export default function MyTickets() {
@@ -22,12 +20,14 @@ export default function MyTickets() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all'); // all, open, closed
   const [searchTerm, setSearchTerm] = useState('');
-  const [debugInfo, setDebugInfo] = useState(null);
-  const [showDebug, setShowDebug] = useState(false);
   const [userEmail, setUserEmail] = useState(null);
 
   // Obtener ID del usuario de varias fuentes posibles
   const userId = user?.glpiID || user?.id || user?.users_id;
+
+  // Obtener el perfil del usuario para determinar si es cliente
+  const isClient = user?.glpiactiveprofile?.interface === 'helpdesk' ||
+                   user?.glpiactiveprofile?.name?.toLowerCase().includes('cliente');
 
   // Obtener el correo del usuario
   useEffect(() => {
@@ -61,188 +61,77 @@ export default function MyTickets() {
     console.log('🎫 CARGANDO TICKETS DEL USUARIO');
     console.log('========================================');
     console.log('🎫 User ID:', userId);
-    console.log('🎫 GLPI ID:', user?.glpiID);
     console.log('🎫 GLPI Name:', user?.glpiname);
-    console.log('🎫 Perfil activo:', user?.glpiactiveprofile);
-    console.log('🎫 Datos completos de sesión:', user);
+    console.log('🎫 Es cliente:', isClient);
+
+    if (!userId) {
+      console.log('❌ No hay userId, no se pueden cargar tickets');
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
     try {
-      let ticketsFound = [];
+      let allTickets = [];
 
-      // Método 1: Usar el nuevo método getMyTickets
-      console.log('📋 Método 1: Usando getMyTickets...');
+      // Para clientes: usar búsqueda por solicitante (field 4 = requester)
+      // Esto filtra en el servidor y solo devuelve tickets donde el usuario es solicitante
+      console.log('📋 Buscando tickets donde soy solicitante...');
       try {
-        const myTickets = await glpiApi.getMyTickets({ range: '0-100' });
-        console.log('📋 Respuesta de getMyTickets:', myTickets);
+        const result = await glpiApi.getTicketsCreatedByUser(userId, { range: '0-200' });
+        const ticketData = result.data || [];
 
-        if (Array.isArray(myTickets) && myTickets.length > 0) {
-          console.log(`✅ Método 1: ${myTickets.length} tickets encontrados`);
-          ticketsFound = myTickets;
+        if (Array.isArray(ticketData) && ticketData.length > 0) {
+          allTickets = ticketData;
+          console.log(`✅ ${allTickets.length} tickets encontrados donde soy solicitante`);
         } else {
-          console.log('⚠️ Método 1: No hay tickets o respuesta vacía');
+          console.log('📭 No se encontraron tickets donde seas solicitante');
         }
       } catch (e) {
-        console.log('❌ Método 1 falló:', e.message);
-      }
+        console.log('❌ Error en búsqueda:', e.message);
 
-      // Método 1b: Obtener tickets directamente (fallback)
-      if (ticketsFound.length === 0) {
-        console.log('📋 Método 1b: Obteniendo todos los tickets accesibles...');
+        // Fallback: intentar con getMyTickets
+        console.log('📋 Intentando método alternativo...');
         try {
-          const allTickets = await glpiApi.getTickets({ range: '0-100' });
-          console.log('📋 Respuesta de getTickets:', allTickets);
-
-          if (Array.isArray(allTickets) && allTickets.length > 0) {
-            console.log(`✅ Método 1b: ${allTickets.length} tickets encontrados`);
-            ticketsFound = allTickets;
-          } else {
-            console.log('⚠️ Método 1b: No hay tickets o respuesta vacía');
-          }
-        } catch (e) {
-          console.log('❌ Método 1b falló:', e.message);
-        }
-      }
-
-      // Método 2: Buscar tickets donde el usuario es solicitante (requester)
-      if (ticketsFound.length === 0 && userId) {
-        console.log(`📋 Método 2: Buscando tickets creados por usuario ID ${userId}...`);
-        try {
-          const result = await glpiApi.getTicketsCreatedByUser(userId, {
-            range: '0-100',
-          });
-          console.log('📋 Respuesta de getTicketsCreatedByUser:', result);
-
-          const ticketData = result.data || result || [];
-          if (Array.isArray(ticketData) && ticketData.length > 0) {
-            console.log(`✅ Método 2: ${ticketData.length} tickets encontrados`);
-            ticketsFound = ticketData;
-          } else {
-            console.log('⚠️ Método 2: No hay tickets');
-          }
-        } catch (e) {
-          console.log('❌ Método 2 falló:', e.message);
-        }
-      }
-
-      // Método 3: Buscar con searchTicketsAdvanced
-      if (ticketsFound.length === 0 && userId) {
-        console.log(`📋 Método 3: Búsqueda avanzada por solicitante ID ${userId}...`);
-        try {
-          const result = await glpiApi.searchTicketsAdvanced(
-            { requesterId: userId },
-            { range: '0-100' }
-          );
-          console.log('📋 Respuesta de searchTicketsAdvanced:', result);
-
-          const ticketData = result.data || [];
-          if (Array.isArray(ticketData) && ticketData.length > 0) {
-            console.log(`✅ Método 3: ${ticketData.length} tickets encontrados`);
-            ticketsFound = ticketData;
-          } else {
-            console.log('⚠️ Método 3: No hay tickets');
-          }
-        } catch (e) {
-          console.log('❌ Método 3 falló:', e.message);
-        }
-      }
-
-      // Método 4: Obtener todos los Ticket_User del usuario actual
-      if (ticketsFound.length === 0 && userId) {
-        console.log(`📋 Método 4: Obteniendo Ticket_User directamente...`);
-        try {
-          // Usar getItems en lugar de search para evitar problemas de permisos
-          const ticketUsers = await glpiApi.getItems('Ticket_User', {
-            range: '0-200',
-          });
-          console.log('📋 Todos los Ticket_User:', ticketUsers);
-
-          if (Array.isArray(ticketUsers) && ticketUsers.length > 0) {
-            // Filtrar por el usuario actual como solicitante (type=1)
-            const myTicketUsers = ticketUsers.filter(tu => {
-              const tuUserId = tu.users_id || tu[3];
-              const tuType = tu.type || tu[4];
-              return tuUserId == userId && tuType == 1;
+          const myTickets = await glpiApi.getMyTickets({ range: '0-200' });
+          if (Array.isArray(myTickets) && myTickets.length > 0) {
+            // Filtrar manualmente por users_id_recipient
+            const userIdNum = parseInt(userId);
+            allTickets = myTickets.filter(ticket => {
+              const recipientId = ticket.users_id_recipient;
+              return recipientId && parseInt(recipientId) === userIdNum;
             });
-
-            console.log('📋 Ticket_User del usuario actual:', myTicketUsers);
-
-            if (myTicketUsers.length > 0) {
-              // Extraer IDs de tickets
-              const ticketIds = myTicketUsers.map(tu => tu.tickets_id || tu[2]);
-              console.log('📋 IDs de tickets encontrados:', ticketIds);
-
-              // Obtener detalles de cada ticket
-              const ticketPromises = ticketIds.map(id =>
-                glpiApi.getTicket(id).catch(e => {
-                  console.log(`Error obteniendo ticket ${id}:`, e.message);
-                  return null;
-                })
-              );
-              const tickets = await Promise.all(ticketPromises);
-              ticketsFound = tickets.filter(t => t !== null);
-              console.log(`✅ Método 4: ${ticketsFound.length} tickets obtenidos`);
-            }
+            console.log(`✅ ${allTickets.length} tickets después de filtrar`);
           }
-        } catch (e) {
-          console.log('❌ Método 4 falló:', e.message);
-        }
-      }
-
-      // Método 5: Verificar sesión completa y tickets accesibles
-      if (ticketsFound.length === 0) {
-        console.log('📋 Método 5: Verificando permisos de sesión...');
-        try {
-          const session = await glpiApi.getFullSession();
-          console.log('📋 Sesión completa:', session);
-          console.log('📋 Perfiles disponibles:', session?.session?.glpiprofiles);
-          console.log('📋 Entidades disponibles:', session?.session?.glpientities);
-        } catch (e) {
-          console.log('❌ Error obteniendo sesión:', e.message);
+        } catch (e2) {
+          console.log('❌ Error en método alternativo:', e2.message);
+          setError('No se pudieron cargar los tickets.');
         }
       }
 
       console.log('========================================');
-      console.log(`🎫 TOTAL TICKETS ENCONTRADOS: ${ticketsFound.length}`);
+      console.log(`🎫 TOTAL TICKETS: ${allTickets.length}`);
       console.log('========================================');
 
-      setTickets(ticketsFound);
+      // Ordenar tickets por fecha de creación descendente (más reciente primero)
+      allTickets.sort((a, b) => {
+        const dateA = new Date(a.date || a[15] || 0);
+        const dateB = new Date(b.date || b[15] || 0);
+        return dateB - dateA; // Descendente
+      });
 
-      // Guardar información de debug
-      const debug = {
-        userId: userId,
-        glpiID: user?.glpiID,
-        glpiname: user?.glpiname,
-        profile: user?.glpiactiveprofile?.name || 'Desconocido',
-        profileId: user?.glpiactiveprofile?.id,
-        entity: user?.glpiactive_entity,
-        ticketsFound: ticketsFound.length,
-      };
-      setDebugInfo(debug);
-
-      if (ticketsFound.length === 0) {
-        console.log('⚠️ No se encontraron tickets. Posibles causas:');
-        console.log('   1. El usuario no ha creado ningún ticket');
-        console.log('   2. El perfil Self-Service no tiene permisos de API para ver tickets');
-        console.log('   3. Los tickets están en otra entidad');
-      }
+      setTickets(allTickets);
 
     } catch (err) {
       console.error('❌ Error cargando tickets:', err);
-      setError('No se pudieron cargar los tickets. Verifica tu conexión.');
+      setError('No se pudieron cargar los tickets.');
       setTickets([]);
-      setDebugInfo({
-        error: err.message,
-        userId: userId,
-        glpiID: user?.glpiID,
-        profile: user?.glpiactiveprofile?.name || 'Desconocido',
-      });
     } finally {
       setLoading(false);
     }
-  }, [userId, user]);
+  }, [userId, user, isClient]);
 
   useEffect(() => {
     fetchTickets();
@@ -269,6 +158,7 @@ export default function MyTickets() {
     if (filter === 'open' && ticketStatus >= 5) return false;
     if (filter === 'closed' && ticketStatus < 5) return false;
 
+
     // Filtro por búsqueda
     if (searchTerm && !ticketName.includes(searchTerm.toLowerCase())) {
       return false;
@@ -286,6 +176,7 @@ export default function MyTickets() {
     const status = t.status || t[12];
     return status >= 5;
   }).length;
+
 
   return (
     <div className="my-tickets-page">
@@ -318,35 +209,64 @@ export default function MyTickets() {
       </div>
 
       {/* Resumen */}
-      <div className="tickets-summary">
+      <div className="tickets-summary" style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, 1fr)',
+        gap: '1rem',
+        marginBottom: '1.5rem'
+      }}>
         <div
           className={`summary-card ${filter === 'all' ? 'active' : ''}`}
           onClick={() => setFilter('all')}
+          style={{
+            padding: '1rem',
+            backgroundColor: filter === 'all' ? '#eff6ff' : 'white',
+            borderRadius: '8px',
+            border: filter === 'all' ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+            cursor: 'pointer',
+            textAlign: 'center'
+          }}
         >
-          <Inbox size={24} />
+          <Inbox size={24} style={{ color: '#3b82f6', marginBottom: '0.5rem' }} />
           <div>
-            <span className="summary-value">{tickets.length}</span>
-            <span className="summary-label">Total</span>
+            <span style={{ fontSize: '1.5rem', fontWeight: '700', display: 'block' }}>{tickets.length}</span>
+            <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Total</span>
           </div>
         </div>
         <div
-          className={`summary-card open ${filter === 'open' ? 'active' : ''}`}
+          className={`summary-card ${filter === 'open' ? 'active' : ''}`}
           onClick={() => setFilter('open')}
+          style={{
+            padding: '1rem',
+            backgroundColor: filter === 'open' ? '#fef3c7' : 'white',
+            borderRadius: '8px',
+            border: filter === 'open' ? '2px solid #f59e0b' : '1px solid #e5e7eb',
+            cursor: 'pointer',
+            textAlign: 'center'
+          }}
         >
-          <Clock size={24} />
+          <Clock size={24} style={{ color: '#f59e0b', marginBottom: '0.5rem' }} />
           <div>
-            <span className="summary-value">{openCount}</span>
-            <span className="summary-label">Abiertos</span>
+            <span style={{ fontSize: '1.5rem', fontWeight: '700', display: 'block' }}>{openCount}</span>
+            <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Abiertos</span>
           </div>
         </div>
         <div
-          className={`summary-card closed ${filter === 'closed' ? 'active' : ''}`}
+          className={`summary-card ${filter === 'closed' ? 'active' : ''}`}
           onClick={() => setFilter('closed')}
+          style={{
+            padding: '1rem',
+            backgroundColor: filter === 'closed' ? '#d1fae5' : 'white',
+            borderRadius: '8px',
+            border: filter === 'closed' ? '2px solid #10b981' : '1px solid #e5e7eb',
+            cursor: 'pointer',
+            textAlign: 'center'
+          }}
         >
-          <CheckCircle size={24} />
+          <CheckCircle size={24} style={{ color: '#10b981', marginBottom: '0.5rem' }} />
           <div>
-            <span className="summary-value">{closedCount}</span>
-            <span className="summary-label">Cerrados</span>
+            <span style={{ fontSize: '1.5rem', fontWeight: '700', display: 'block' }}>{closedCount}</span>
+            <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Cerrados</span>
           </div>
         </div>
       </div>
@@ -382,22 +302,54 @@ export default function MyTickets() {
       </div>
 
       {/* Filtros de estado */}
-      <div className="filter-tabs">
+      <div className="filter-tabs" style={{
+        display: 'flex',
+        gap: '0.5rem',
+        marginBottom: '1rem',
+        flexWrap: 'wrap'
+      }}>
         <button
           className={`filter-tab ${filter === 'all' ? 'active' : ''}`}
           onClick={() => setFilter('all')}
+          style={{
+            padding: '0.5rem 1rem',
+            borderRadius: '6px',
+            border: 'none',
+            backgroundColor: filter === 'all' ? '#3b82f6' : '#f3f4f6',
+            color: filter === 'all' ? 'white' : '#374151',
+            cursor: 'pointer',
+            fontWeight: '500'
+          }}
         >
           Todos ({tickets.length})
         </button>
         <button
           className={`filter-tab ${filter === 'open' ? 'active' : ''}`}
           onClick={() => setFilter('open')}
+          style={{
+            padding: '0.5rem 1rem',
+            borderRadius: '6px',
+            border: 'none',
+            backgroundColor: filter === 'open' ? '#f59e0b' : '#f3f4f6',
+            color: filter === 'open' ? 'white' : '#374151',
+            cursor: 'pointer',
+            fontWeight: '500'
+          }}
         >
           Abiertos ({openCount})
         </button>
         <button
           className={`filter-tab ${filter === 'closed' ? 'active' : ''}`}
           onClick={() => setFilter('closed')}
+          style={{
+            padding: '0.5rem 1rem',
+            borderRadius: '6px',
+            border: 'none',
+            backgroundColor: filter === 'closed' ? '#10b981' : '#f3f4f6',
+            color: filter === 'closed' ? 'white' : '#374151',
+            cursor: 'pointer',
+            fontWeight: '500'
+          }}
         >
           Cerrados ({closedCount})
         </button>
@@ -433,56 +385,6 @@ export default function MyTickets() {
             </Link>
           )}
 
-          {/* Información de diagnóstico */}
-          {tickets.length === 0 && debugInfo && (
-            <div className="debug-section" style={{ marginTop: '2rem' }}>
-              <button
-                className="btn btn-icon"
-                onClick={() => setShowDebug(!showDebug)}
-                style={{ fontSize: '0.8rem', padding: '0.5rem 1rem' }}
-              >
-                <Info size={14} />
-                {showDebug ? 'Ocultar diagnóstico' : 'Ver diagnóstico'}
-              </button>
-
-              {showDebug && (
-                <div
-                  className="debug-info"
-                  style={{
-                    marginTop: '1rem',
-                    padding: '1rem',
-                    backgroundColor: '#f5f5f5',
-                    borderRadius: '8px',
-                    textAlign: 'left',
-                    fontSize: '0.85rem',
-                  }}
-                >
-                  <h4 style={{ marginBottom: '0.5rem' }}>Información de sesión:</h4>
-                  <ul style={{ listStyle: 'none', padding: 0 }}>
-                    <li><strong>User ID:</strong> {debugInfo.userId || 'No disponible'}</li>
-                    <li><strong>GLPI ID:</strong> {debugInfo.glpiID || 'No disponible'}</li>
-                    <li><strong>Usuario:</strong> {debugInfo.glpiname || 'No disponible'}</li>
-                    <li><strong>Perfil:</strong> {debugInfo.profile} (ID: {debugInfo.profileId || 'N/A'})</li>
-                    <li><strong>Entidad activa:</strong> {debugInfo.entity || 'No especificada'}</li>
-                  </ul>
-
-                  <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Posibles soluciones:</h4>
-                  <ul style={{ paddingLeft: '1.2rem', color: '#666' }}>
-                    <li>Verificar que el perfil <strong>Self-Service</strong> tenga permisos de lectura en la API</li>
-                    <li>En GLPI: Configuración → Perfiles → Self-Service → API → Habilitar "Leer"</li>
-                    <li>Verificar que los tickets estén en la entidad correcta</li>
-                    <li>Revisar la consola del navegador (F12) para más detalles</li>
-                  </ul>
-
-                  {debugInfo.error && (
-                    <p style={{ color: '#dc2626', marginTop: '1rem' }}>
-                      <strong>Error:</strong> {debugInfo.error}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       ) : (
         <div className="tickets-list">
@@ -491,36 +393,72 @@ export default function MyTickets() {
             const ticketName = ticket.name || ticket[1];
             const ticketStatus = ticket.status || ticket[12];
             const ticketDate = ticket.date || ticket[15];
-            const ticketDateMod = ticket.date_mod || ticket[19];
 
             const status = getStatusLabel(ticketStatus);
             const StatusIcon = status.icon;
 
             return (
-              <Link to={`/tickets/${ticketId}`} key={ticketId} className="ticket-card">
-                <div className="ticket-card-header">
-                  <span className="ticket-id">#{ticketId}</span>
-                  <span className={`badge ${status.class}`}>
-                    <StatusIcon size={14} />
+              <Link
+                key={ticketId}
+                to={`/tickets/${ticketId}`}
+                className="ticket-card"
+                style={{
+                  display: 'block',
+                  backgroundColor: 'white',
+                  borderRadius: '8px',
+                  padding: '1rem',
+                  marginBottom: '0.75rem',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                  textDecoration: 'none',
+                  color: 'inherit',
+                  border: '1px solid #e5e7eb',
+                  transition: 'box-shadow 0.2s',
+                }}
+              >
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: '0.5rem'
+                }}>
+                  <span style={{
+                    fontWeight: '600',
+                    color: '#3b82f6',
+                    fontSize: '0.9rem'
+                  }}>#{ticketId}</span>
+                  <span className={`badge ${status.class}`} style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '0.75rem'
+                  }}>
+                    <StatusIcon size={12} />
                     {status.label}
                   </span>
                 </div>
-                <h3 className="ticket-title">{ticketName}</h3>
-                <div className="ticket-card-footer">
-                  <span className="ticket-date">
-                    Creado: {ticketDate ? new Date(ticketDate).toLocaleDateString('es-MX') : '-'}
-                  </span>
-                  {ticketDateMod && ticketDateMod !== ticketDate && (
-                    <span className="ticket-updated">
-                      Actualizado: {new Date(ticketDateMod).toLocaleDateString('es-MX')}
-                    </span>
-                  )}
+                <h3 style={{
+                  margin: '0 0 0.5rem 0',
+                  fontSize: '0.95rem',
+                  fontWeight: '500',
+                  color: '#1f2937',
+                  lineHeight: '1.4'
+                }}>{ticketName}</h3>
+                <div style={{
+                  fontSize: '0.8rem',
+                  color: '#6b7280',
+                  display: 'flex',
+                  gap: '1rem'
+                }}>
+                  <span>Creado: {ticketDate ? new Date(ticketDate).toLocaleDateString('es-MX') : '-'}</span>
                 </div>
               </Link>
             );
           })}
         </div>
       )}
+
     </div>
   );
 }

@@ -1,5 +1,7 @@
-import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import AIChatWidget from './AIChatWidget';
+import { APP_VERSION } from '../version';
 import {
   LayoutDashboard,
   TicketPlus,
@@ -13,13 +15,40 @@ import {
   Shield,
   Wrench,
   LayoutGrid,
+  KeyRound,
+  Bot,
 } from 'lucide-react';
 import { useState } from 'react';
 
 export default function Layout({ children }) {
   const { user, role, logout, isAdmin, isTechnician, isClient } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Limpiar nombre de entidad: "Root entity > Natura (tree structure)" -> "Natura"
+  const getCleanEntityName = () => {
+    const rawName = user?.glpiactive_entity_name;
+    if (!rawName) return null;
+
+    // Quitar "(tree structure)" o similar
+    let clean = rawName.replace(/\s*\([^)]*\)\s*$/, '').trim();
+
+    // Si tiene ">", tomar solo la última parte
+    if (clean.includes('>')) {
+      const parts = clean.split('>');
+      clean = parts[parts.length - 1].trim();
+    }
+
+    // Si es "Root entity" o similar, no mostrar
+    if (clean.toLowerCase() === 'root entity' || clean.toLowerCase() === 'entidad raíz') {
+      return null;
+    }
+
+    return clean;
+  };
+
+  const entityName = getCleanEntityName();
 
   const getRoleLabel = () => {
     if (isAdmin) return { label: 'Administrador', icon: Shield, color: '#dc2626' };
@@ -32,18 +61,30 @@ export default function Layout({ children }) {
   const getNavItems = () => {
     const items = [];
 
+    // Dashboard - todos
     items.push({
       path: '/',
       label: 'Dashboard',
       icon: LayoutDashboard,
     });
 
+    // Crear ticket - todos
     items.push({
       path: '/tickets/new',
       label: 'Nuevo Ticket',
       icon: TicketPlus,
     });
 
+    // Chat IA - solo técnicos y admins
+    if (isTechnician || isAdmin) {
+      items.push({
+        path: '/ai-chat',
+        label: 'Asistente IA',
+        icon: Bot,
+      });
+    }
+
+    // Mis tickets - clientes
     if (isClient) {
       items.push({
         path: '/my-tickets',
@@ -52,7 +93,13 @@ export default function Layout({ children }) {
       });
     }
 
+    // Técnicos - Gestión de tickets
     if (isTechnician) {
+      items.push({
+        path: '/my-tickets',
+        label: 'Mis Tickets Creados',
+        icon: Ticket,
+      });
       items.push({
         path: '/tickets?assignment=mine',
         label: 'Mis Asignados',
@@ -70,7 +117,13 @@ export default function Layout({ children }) {
       });
     }
 
+    // Admin - Gestión completa
     if (isAdmin) {
+      items.push({
+        path: '/my-tickets',
+        label: 'Mis Tickets Creados',
+        icon: Ticket,
+      });
       items.push({
         path: '/tickets?assignment=mine',
         label: 'Mis Asignados',
@@ -98,18 +151,22 @@ export default function Layout({ children }) {
 
   const navItems = getNavItems();
 
+  // Helper para verificar si un item está activo
   const isItemActive = (itemPath) => {
     const [pathname, search] = itemPath.split('?');
 
+    // Si no hay query params, comparar solo pathname
     if (!search) {
       return location.pathname === pathname && !location.search;
     }
 
+    // Si hay query params, comparar pathname y params específicos
     if (location.pathname !== pathname) return false;
 
     const itemParams = new URLSearchParams(search);
     const currentParams = new URLSearchParams(location.search);
 
+    // Verificar que los params del item coincidan
     for (const [key, value] of itemParams) {
       if (currentParams.get(key) !== value) return false;
     }
@@ -138,28 +195,58 @@ export default function Layout({ children }) {
               <roleInfo.icon size={12} />
               {roleInfo.label}
             </span>
+            {entityName && (
+              <span className="user-entity" style={{
+                fontSize: '0.75rem',
+                color: '#6b7280',
+                marginTop: '2px'
+              }}>
+                🏢 {entityName}
+              </span>
+            )}
           </div>
         </div>
 
         <nav className="sidebar-nav">
-          {navItems.map((item) => (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={`nav-item ${isItemActive(item.path) ? 'active' : ''}`}
-              onClick={() => setSidebarOpen(false)}
-            >
-              <item.icon size={20} />
-              <span>{item.label}</span>
-            </Link>
-          ))}
+          {navItems.map((item) => {
+            const isActive = isItemActive(item.path);
+            const currentFullPath = location.pathname + location.search;
+            const isSamePath = currentFullPath === item.path;
+
+            return (
+              <button
+                key={item.path}
+                className={`nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => {
+                  setSidebarOpen(false);
+                  if (!isSamePath) {
+                    navigate(item.path);
+                  }
+                }}
+              >
+                <item.icon size={20} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
 
         <div className="sidebar-footer">
+          <Link
+            to="/change-password"
+            className={`nav-item ${location.pathname === '/change-password' ? 'active' : ''}`}
+            onClick={() => setSidebarOpen(false)}
+          >
+            <KeyRound size={20} />
+            <span>Cambiar Contraseña</span>
+          </Link>
           <button className="nav-item logout" onClick={logout}>
             <LogOut size={20} />
             <span>Cerrar Sesión</span>
           </button>
+          <div className="sidebar-version">
+            v{APP_VERSION}
+          </div>
         </div>
       </aside>
 
@@ -175,7 +262,19 @@ export default function Layout({ children }) {
             <Menu size={24} />
           </button>
           <div className="header-title">
-            <h1>Mesa de Ayuda - SCRAM</h1>
+            <h1>
+              Mesa de Ayuda - SCRAM
+              {entityName && (
+                <span style={{
+                  fontSize: '0.6em',
+                  fontWeight: 'normal',
+                  marginLeft: '8px',
+                  opacity: 0.8
+                }}>
+                  ({entityName})
+                </span>
+              )}
+            </h1>
           </div>
           <div className="header-user">
             <span className="role-badge" style={{ backgroundColor: roleInfo.color }}>
@@ -188,6 +287,9 @@ export default function Layout({ children }) {
           {children}
         </div>
       </main>
+
+      {/* Chat flotante de IA - solo para técnicos y admins */}
+      {(isTechnician || isAdmin) && <AIChatWidget />}
     </div>
   );
 }

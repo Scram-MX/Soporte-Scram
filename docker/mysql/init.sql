@@ -9,4 +9,4 @@ GRANT ALL PRIVILEGES ON glpi.* TO 'glpi_user'@'%';
 FLUSH PRIVILEGES;
 
 -- Mensaje de confirmación
-SELECT 'Base de datos GLPI (SCRAM) inicializada correctamente' AS mensaje;
+SELECT 'Base de datos GLPI inicializada correctamente' AS mensaje;

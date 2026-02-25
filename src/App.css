@@ -186,6 +186,15 @@ body {
   border-top: 1px solid rgba(255,255,255,0.1);
 }
 
+.sidebar-version {
+  text-align: center;
+  font-size: 10px;
+  color: rgba(255,255,255,0.4);
+  padding-top: 12px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
 .sidebar-overlay {
   display: none;
   position: fixed;
@@ -375,6 +384,103 @@ body {
 .login-footer p {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.login-footer .version-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.7;
+  margin-top: 4px;
+}
+
+/* Forgot Password */
+.forgot-password-link {
+  background: none;
+  border: none;
+  color: var(--primary-color);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  text-align: right;
+  width: 100%;
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
+
+.forgot-password-link:hover {
+  text-decoration: underline;
+  color: var(--primary-hover);
+}
+
+.forgot-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.forgot-header svg {
+  color: var(--primary-color);
+  margin-bottom: 12px;
+}
+
+.forgot-header h3 {
+  font-size: 20px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.forgot-header p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  margin-top: 8px;
+}
+
+.btn-link:hover {
+  color: var(--primary-color);
+}
+
+.success-message {
+  text-align: center;
+  padding: 16px;
+}
+
+.success-message .success-icon {
+  color: var(--success-color);
+  margin-bottom: 16px;
+}
+
+.success-message h3 {
+  font-size: 20px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.success-message p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+
+.success-message strong {
+  color: var(--primary-color);
+}
+
+.success-message .btn {
+  margin-top: 16px;
 }
 
 /* ==================== DASHBOARD ==================== */
@@ -890,6 +996,46 @@ body {
 .priority-veryhigh { background: #fecaca; color: #b91c1c; }
 .priority-major { background: #7f1d1d; color: white; }
 
+/* Origen del ticket */
+.origin-smartsheet { background: #e0f2fe; color: #0369a1; }
+.origin-portal { background: #ede9fe; color: #6d28d9; }
+.origin-email { background: #fef3c7; color: #b45309; }
+.origin-whatsapp { background: #d1fae5; color: #047857; }
+.origin-unknown { color: var(--text-muted); font-style: italic; }
+
+.ticket-origin { white-space: nowrap; }
+
+/* ID de Smartsheet */
+.ticket-ss-id { white-space: nowrap; text-align: center; }
+.ss-id-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  background: #e0f2fe;
+  color: #0369a1;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: monospace;
+}
+.ss-id-na {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Filtros de fecha */
+.filter-dates .date-input {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  background: white;
+}
+.filter-dates .date-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
 /* ==================== EMPTY STATE ==================== */
 .empty-state {
   padding: 48px 24px;
@@ -1323,6 +1469,12 @@ body {
   border: 1px solid #bae6fd;
 }
 
+.requester-highlight {
+  border: 2px solid #2563eb;
+  border-radius: 10px;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
 .requester-info {
   display: flex;
   flex-direction: column;
@@ -1357,9 +1509,42 @@ body {
 }
 
 .requester-phone {
-  font-size: 12px;
-  color: var(--text-muted);
-  padding-left: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.requester-phone svg {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+/* Single assignee select */
+.single-assignee {
+  margin-top: 8px;
+}
+
+.single-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 14px;
+  background: white;
+  cursor: pointer;
+}
+
+.single-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.single-select:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
 }
 
 .contact-actions {
@@ -1439,6 +1624,25 @@ body {
 
 .notification-warning svg {
   flex-shrink: 0;
+}
+
+/* Notificación automática info */
+.notification-auto-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border: 1px solid #6ee7b7;
+  border-radius: var(--radius);
+  margin-top: 12px;
+  font-size: 12px;
+  color: #065f46;
+}
+
+.notification-auto-info svg {
+  flex-shrink: 0;
+  color: #10b981;
 }
 
 .followup-form-actions {
@@ -3342,17 +3546,19 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 0;
-  font-size: 12px;
+  padding: 4px 0;
+  font-size: 11px;
 }
 
 .sla-stats .stat-label {
   color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .sla-stats .stat-value {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
+  font-size: 11px;
 }
 
 /* Alerta sin SLA */

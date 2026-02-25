@@ -21,6 +21,11 @@ import {
   Hash,
   Timer,
   AlertTriangle,
+  FileSpreadsheet,
+  Monitor,
+  Mail,
+  Smartphone,
+  Globe,
 } from 'lucide-react';
 
 export default function TicketList() {
@@ -43,11 +48,33 @@ export default function TicketList() {
   const [priorityFilter, setPriorityFilter] = useState(
     searchParams.get('priority') || 'all'
   );
+  const [originFilter, setOriginFilter] = useState(
+    searchParams.get('origin') || 'all'
+  );
+  const [technicianFilter, setTechnicianFilter] = useState(
+    searchParams.get('technician') || 'all'
+  );
+
+  // Por defecto mostrar tickets de los últimos 7 días
+  const getDefaultDateFrom = () => {
+    const date = new Date();
+    date.setDate(date.getDate() - 7);
+    return date.toISOString().split('T')[0];
+  };
+
+  const [dateFromFilter, setDateFromFilter] = useState(
+    searchParams.get('dateFrom') || getDefaultDateFrom()
+  );
+  const [dateToFilter, setDateToFilter] = useState(
+    searchParams.get('dateTo') || ''
+  );
   const [searchTerm, setSearchTerm] = useState(
     searchParams.get('search') || ''
   );
   const [searchById, setSearchById] = useState('');
   const [searchByIdError, setSearchByIdError] = useState('');
+  const [searchBySSId, setSearchBySSId] = useState('');
+  const [searchBySSIdError, setSearchBySSIdError] = useState('');
 
   // Paginación
   const [page, setPage] = useState(parseInt(searchParams.get('page')) || 0);
@@ -66,12 +93,18 @@ export default function TicketList() {
   // Datos auxiliares
   const [technicians, setTechnicians] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [allTechnicians, setAllTechnicians] = useState([]);
+  const [groupTechniciansMap, setGroupTechniciansMap] = useState({});
+
+  // Cache de asignaciones de tickets
+  const [ticketAssignments, setTicketAssignments] = useState({});
 
   // Modal de asignación rápida
   const [showQuickAssign, setShowQuickAssign] = useState(null);
   const [quickAssignTech, setQuickAssignTech] = useState('');
   const [quickAssignGroup, setQuickAssignGroup] = useState('');
   const [assigning, setAssigning] = useState(false);
+  const [filteredTechnicians, setFilteredTechnicians] = useState([]);
 
   const userId = user?.glpiID;
 
@@ -107,12 +140,17 @@ export default function TicketList() {
     const loadAuxData = async () => {
       if (isAdmin || isTechnician) {
         try {
-          const [techData, groupData] = await Promise.all([
+          const [techData, groupData, groupMapData] = await Promise.all([
             glpiApi.getTechnicians().catch(() => []),
             glpiApi.getGroups().catch(() => []),
+            glpiApi.getGroupTechniciansMap().catch(() => ({})),
           ]);
-          setTechnicians(Array.isArray(techData) ? techData : []);
+          const techList = Array.isArray(techData) ? techData : [];
+          setTechnicians(techList);
+          setAllTechnicians(techList);
+          setFilteredTechnicians(techList);
           setGroups(Array.isArray(groupData) ? groupData : []);
+          setGroupTechniciansMap(groupMapData || {});
         } catch (err) {
           console.error('Error loading aux data:', err);
         }
@@ -120,6 +158,70 @@ export default function TicketList() {
     };
     loadAuxData();
   }, [isAdmin, isTechnician]);
+
+  // Estado para controlar carga de asignaciones
+  const [loadingAssignments, setLoadingAssignments] = useState(false);
+
+  // Cargar asignaciones de tickets - OPTIMIZADO: carga en lotes pequeños y en background
+  useEffect(() => {
+    const loadAssignments = async () => {
+      if (tickets.length === 0) return;
+
+      setLoadingAssignments(true);
+      const assignments = {};
+
+      // Cargar en lotes de 5 para no saturar
+      const batchSize = 5;
+      for (let i = 0; i < tickets.length; i += batchSize) {
+        const batch = tickets.slice(i, i + batchSize);
+
+        await Promise.all(
+          batch.map(async (ticket) => {
+            const ticketId = ticket.id || ticket[2];
+            try {
+              const assignees = await glpiApi.getTicketAssignees(ticketId);
+              const assignedUser = assignees.users.find(u => u.type === 2);
+              const assignedGroup = assignees.groups.find(g => g.type === 2);
+
+              if (assignedUser || assignedGroup) {
+                let techName = null;
+                if (assignedUser?.users_id) {
+                  const tech = technicians.find(t => Number(t.id) === Number(assignedUser.users_id));
+                  techName = tech ? (tech.realname ? `${tech.realname} ${tech.firstname || ''}`.trim() : tech.name) : `ID:${assignedUser.users_id}`;
+                }
+
+                let groupName = null;
+                if (assignedGroup?.groups_id) {
+                  const grp = groups.find(g => Number(g.id) === Number(assignedGroup.groups_id));
+                  groupName = grp?.name || `Grupo #${assignedGroup.groups_id}`;
+                }
+
+                assignments[ticketId] = {
+                  userId: assignedUser?.users_id,
+                  userName: techName,
+                  userAssignmentId: assignedUser?.id,
+                  groupId: assignedGroup?.groups_id,
+                  groupName: groupName,
+                  groupAssignmentId: assignedGroup?.id,
+                };
+              }
+            } catch (e) {
+              // Ignorar errores individuales
+            }
+          })
+        );
+
+        // Actualizar parcialmente mientras carga
+        setTicketAssignments(prev => ({ ...prev, ...assignments }));
+      }
+
+      setLoadingAssignments(false);
+    };
+
+    if (technicians.length > 0 || groups.length > 0) {
+      loadAssignments();
+    }
+  }, [tickets, technicians, groups]);
 
   // Función principal de búsqueda
   const fetchTickets = useCallback(async () => {
@@ -147,14 +249,50 @@ export default function TicketList() {
         filters.priority = priorityFilter;
       }
 
-      // Aplicar búsqueda de texto
+      // Aplicar filtro de origen
+      if (originFilter !== 'all') {
+        if (originFilter === 'Smartsheet') {
+          // Smartsheet se busca por [SS- en el título
+          filters.searchText = '[SS-';
+        } else {
+          // Otros orígenes se buscan por [ORIGEN:xxx] en el contenido
+          filters.searchContent = `[ORIGEN:${originFilter}]`;
+        }
+      }
+
+      // Aplicar filtro de técnico asignado
+      if (technicianFilter !== 'all') {
+        filters.assignedTo = parseInt(technicianFilter, 10);
+      }
+
+      // Aplicar filtro de fechas
+      if (dateFromFilter) {
+        filters.dateFrom = dateFromFilter;
+      }
+      if (dateToFilter) {
+        filters.dateTo = dateToFilter;
+      }
+
+      // Aplicar búsqueda de texto (se suma al filtro de origen si existe)
       if (searchTerm.trim()) {
-        filters.searchText = searchTerm.trim();
+        if (filters.searchText) {
+          filters.searchText += ` ${searchTerm.trim()}`;
+        } else {
+          filters.searchText = searchTerm.trim();
+        }
       }
 
       const result = await glpiApi.searchTicketsAdvanced(filters, { range });
 
-      const ticketData = result.data || [];
+      let ticketData = result.data || [];
+
+      // Ordenar por fecha descendente (más reciente primero) como fallback
+      ticketData.sort((a, b) => {
+        const dateA = new Date(a.date || a[15] || 0);
+        const dateB = new Date(b.date || b[15] || 0);
+        return dateB - dateA;
+      });
+
       setTickets(ticketData);
       setTotalCount(result.totalcount || ticketData.length);
     } catch (err) {
@@ -163,7 +301,7 @@ export default function TicketList() {
     } finally {
       setLoading(false);
     }
-  }, [page, assignmentFilter, statusFilter, priorityFilter, searchTerm, userId]);
+  }, [page, assignmentFilter, statusFilter, priorityFilter, originFilter, technicianFilter, dateFromFilter, dateToFilter, searchTerm, userId]);
 
   // Efecto para cargar tickets
   useEffect(() => {
@@ -181,10 +319,14 @@ export default function TicketList() {
     if (assignmentFilter !== 'all') params.set('assignment', assignmentFilter);
     if (statusFilter !== 'all') params.set('status', statusFilter);
     if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+    if (originFilter !== 'all') params.set('origin', originFilter);
+    if (technicianFilter !== 'all') params.set('technician', technicianFilter);
+    if (dateFromFilter) params.set('dateFrom', dateFromFilter);
+    if (dateToFilter) params.set('dateTo', dateToFilter);
     if (searchTerm) params.set('search', searchTerm);
     if (page > 0) params.set('page', page.toString());
     setSearchParams(params, { replace: true });
-  }, [assignmentFilter, statusFilter, priorityFilter, searchTerm, page, setSearchParams]);
+  }, [assignmentFilter, statusFilter, priorityFilter, originFilter, technicianFilter, dateFromFilter, dateToFilter, searchTerm, page, setSearchParams]);
 
   // Handlers
   const handleSearch = (e) => {
@@ -218,19 +360,59 @@ export default function TicketList() {
     }
   };
 
+  // Búsqueda por ID de Smartsheet
+  const handleSearchBySSId = async (e) => {
+    e.preventDefault();
+    setSearchBySSIdError('');
+
+    const ssId = searchBySSId.trim().replace('SS-', '').replace('ss-', '');
+
+    if (!ssId || isNaN(ssId)) {
+      setSearchBySSIdError('Ingresa un ID válido');
+      return;
+    }
+
+    // Buscar ticket que contenga [SS-XXX] en el título
+    setOriginFilter('all');
+    setSearchTerm(`[SS-${ssId}]`);
+    setPage(0);
+  };
+
   const handleFilterChange = (filterType, value) => {
     setPage(0);
     if (filterType === 'assignment') setAssignmentFilter(value);
     if (filterType === 'status') setStatusFilter(value);
     if (filterType === 'priority') setPriorityFilter(value);
+    if (filterType === 'origin') setOriginFilter(value);
+    if (filterType === 'technician') setTechnicianFilter(value);
+    if (filterType === 'dateFrom') setDateFromFilter(value);
+    if (filterType === 'dateTo') setDateToFilter(value);
   };
 
   const clearFilters = () => {
     setAssignmentFilter('all');
     setStatusFilter('all');
     setPriorityFilter('all');
+    setOriginFilter('all');
+    setTechnicianFilter('all');
+    setDateFromFilter('');
+    setDateToFilter('');
     setSearchTerm('');
     setPage(0);
+  };
+
+  // Filtrar técnicos cuando cambia el grupo en el modal
+  const handleQuickGroupChange = (groupId) => {
+    setQuickAssignGroup(groupId);
+    setQuickAssignTech(''); // Reset técnico
+
+    if (groupId && groupTechniciansMap[groupId]) {
+      const techIds = groupTechniciansMap[groupId];
+      const filtered = allTechnicians.filter(t => techIds.includes(Number(t.id)));
+      setFilteredTechnicians(filtered);
+    } else {
+      setFilteredTechnicians(allTechnicians);
+    }
   };
 
   const handleQuickAssign = async (ticketId) => {
@@ -241,22 +423,58 @@ export default function TicketList() {
 
     setAssigning(true);
     try {
+      // Verificar asignaciones existentes
+      const currentAssignment = ticketAssignments[ticketId];
+
+      // Si hay técnico nuevo y ya existía uno, primero eliminar el anterior
       if (quickAssignTech) {
+        if (currentAssignment?.userAssignmentId) {
+          await glpiApi.removeTicketUserAssignment(currentAssignment.userAssignmentId).catch(() => {});
+        }
         await glpiApi.assignTicketToUser(ticketId, parseInt(quickAssignTech, 10));
       }
+
+      // Si hay grupo nuevo y ya existía uno, primero eliminar el anterior
       if (quickAssignGroup) {
+        if (currentAssignment?.groupAssignmentId) {
+          await glpiApi.removeTicketGroupAssignment(currentAssignment.groupAssignmentId).catch(() => {});
+        }
         await glpiApi.assignTicketToGroup(ticketId, parseInt(quickAssignGroup, 10));
       }
+
       setShowQuickAssign(null);
       setQuickAssignTech('');
       setQuickAssignGroup('');
+      setFilteredTechnicians(allTechnicians);
       fetchTickets();
-      fetchStats(); // Actualizar estadísticas
+      fetchStats();
     } catch (err) {
-      setError(err.message);
+      setError('Error al asignar: ' + err.message);
     } finally {
       setAssigning(false);
     }
+  };
+
+  // Al abrir el modal, precargar asignaciones existentes
+  const openQuickAssign = (ticketId) => {
+    const current = ticketAssignments[ticketId];
+    if (current) {
+      setQuickAssignGroup(current.groupId?.toString() || '');
+      setQuickAssignTech(current.userId?.toString() || '');
+      // Filtrar técnicos si hay grupo
+      if (current.groupId && groupTechniciansMap[current.groupId]) {
+        const techIds = groupTechniciansMap[current.groupId];
+        const filtered = allTechnicians.filter(t => techIds.includes(Number(t.id)));
+        setFilteredTechnicians(filtered);
+      } else {
+        setFilteredTechnicians(allTechnicians);
+      }
+    } else {
+      setQuickAssignGroup('');
+      setQuickAssignTech('');
+      setFilteredTechnicians(allTechnicians);
+    }
+    setShowQuickAssign(ticketId);
   };
 
   // Helpers de presentación
@@ -284,11 +502,43 @@ export default function TicketList() {
     return priorityMap[priority] || { label: 'Normal', class: 'priority-medium' };
   };
 
+  // Detectar origen del ticket - Smartsheet se detecta por [SS-XXX], los demás por el contenido
+  const getTicketOrigin = (ticketName, ticketContent) => {
+    // Los tickets de Smartsheet tienen [SS-XXXX] en el nombre
+    if (ticketName && ticketName.includes('[SS-')) {
+      return { label: 'Smartsheet', class: 'origin-smartsheet', icon: FileSpreadsheet };
+    }
+    // Para otros orígenes, verificar el contenido si está disponible
+    if (ticketContent) {
+      if (ticketContent.includes('[ORIGEN:Portal]')) {
+        return { label: 'Portal', class: 'origin-portal', icon: Monitor };
+      }
+      if (ticketContent.includes('[ORIGEN:Correo]')) {
+        return { label: 'Correo', class: 'origin-email', icon: Mail };
+      }
+      if (ticketContent.includes('[ORIGEN:WhatsApp]')) {
+        return { label: 'WhatsApp', class: 'origin-whatsapp', icon: Smartphone };
+      }
+    }
+    return null;
+  };
+
+  // Extraer ID de Smartsheet del título
+  const getSmartsheetId = (ticketName) => {
+    if (!ticketName) return null;
+    const match = ticketName.match(/\[SS-(\d+)\]/);
+    return match ? match[1] : null;
+  };
+
   const totalPages = Math.ceil(totalCount / pageSize);
   const hasActiveFilters =
     assignmentFilter !== 'all' ||
     statusFilter !== 'all' ||
     priorityFilter !== 'all' ||
+    originFilter !== 'all' ||
+    technicianFilter !== 'all' ||
+    dateFromFilter !== '' ||
+    dateToFilter !== '' ||
     searchTerm !== '';
 
   return (
@@ -402,6 +652,41 @@ export default function TicketList() {
             )}
           </form>
 
+          {/* Búsqueda por ID Smartsheet */}
+          <form onSubmit={handleSearchBySSId} className="search-by-id-form">
+            <div className={`search-input-wrapper small ${searchBySSIdError ? 'error' : ''}`}>
+              <FileSpreadsheet size={16} />
+              <input
+                type="text"
+                placeholder="ID SS..."
+                value={searchBySSId}
+                onChange={(e) => {
+                  setSearchBySSId(e.target.value);
+                  setSearchBySSIdError('');
+                }}
+                style={{ width: '80px' }}
+              />
+              {searchBySSId && (
+                <button
+                  type="button"
+                  className="clear-search"
+                  onClick={() => {
+                    setSearchBySSId('');
+                    setSearchBySSIdError('');
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+            <button type="submit" className="btn btn-sm btn-secondary">
+              Buscar
+            </button>
+            {searchBySSIdError && (
+              <span className="search-error">{searchBySSIdError}</span>
+            )}
+          </form>
+
           {/* Búsqueda por título */}
           <form onSubmit={handleSearch} className="search-form">
             <div className="search-input-wrapper">
@@ -461,6 +746,66 @@ export default function TicketList() {
             </select>
           </div>
 
+          <div className="filter-group">
+            <label>
+              <Globe size={14} />
+              Origen:
+            </label>
+            <select
+              value={originFilter}
+              onChange={(e) => handleFilterChange('origin', e.target.value)}
+            >
+              <option value="all">Todos</option>
+              <option value="Smartsheet">Smartsheet</option>
+              <option value="Portal">Portal</option>
+              <option value="Correo">Correo</option>
+              <option value="WhatsApp">WhatsApp</option>
+            </select>
+          </div>
+
+          {(isAdmin || isTechnician) && (
+            <div className="filter-group">
+              <label>
+                <User size={14} />
+                Técnico:
+              </label>
+              <select
+                value={technicianFilter}
+                onChange={(e) => handleFilterChange('technician', e.target.value)}
+              >
+                <option value="all">Todos</option>
+                {technicians.map((tech) => (
+                  <option key={tech.id} value={tech.id}>
+                    {tech.realname || tech.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="filter-group filter-dates">
+            <label>
+              <Clock size={14} />
+              Desde:
+            </label>
+            <input
+              type="date"
+              value={dateFromFilter}
+              onChange={(e) => handleFilterChange('dateFrom', e.target.value)}
+              className="date-input"
+            />
+          </div>
+
+          <div className="filter-group filter-dates">
+            <label>Hasta:</label>
+            <input
+              type="date"
+              value={dateToFilter}
+              onChange={(e) => handleFilterChange('dateTo', e.target.value)}
+              className="date-input"
+            />
+          </div>
+
           {hasActiveFilters && (
             <button onClick={clearFilters} className="btn btn-sm btn-secondary">
               <X size={14} />
@@ -510,7 +855,9 @@ export default function TicketList() {
               <thead>
                 <tr>
                   <th>ID</th>
+                  <th>ID SS</th>
                   <th>Título</th>
+                  <th>Origen</th>
                   <th>Estado</th>
                   <th>Prioridad</th>
                   <th>SLA</th>
@@ -563,12 +910,32 @@ export default function TicketList() {
                   };
                   const slaStatus = getSLAStatus();
                   const StatusIcon = status.icon;
+                  const ticketContent = ticket.content || ticket[21] || '';
+                  const origin = getTicketOrigin(ticketName, ticketContent);
+                  const smartsheetId = getSmartsheetId(ticketName);
 
                   return (
                     <tr key={ticketId} className={ticketStatus === 1 ? 'ticket-row-new' : ''}>
                       <td className="ticket-id">#{ticketId}</td>
+                      <td className="ticket-ss-id">
+                        {smartsheetId ? (
+                          <span className="ss-id-badge">SS-{smartsheetId}</span>
+                        ) : (
+                          <span className="ss-id-na">N/A</span>
+                        )}
+                      </td>
                       <td className="ticket-name">
                         <Link to={`/tickets/${ticketId}`}>{ticketName}</Link>
+                      </td>
+                      <td className="ticket-origin">
+                        {origin ? (
+                          <span className={`badge ${origin.class}`}>
+                            <origin.icon size={12} />
+                            {origin.label}
+                          </span>
+                        ) : (
+                          <span className="origin-unknown">-</span>
+                        )}
                       </td>
                       <td>
                         <span className={`badge ${status.class}`}>
@@ -592,10 +959,35 @@ export default function TicketList() {
                         )}
                       </td>
                       <td className="ticket-assigned">
-                        {assignedUser && assignedUser !== 0 ? (
-                          <span className="assigned-user">
+                        {ticketAssignments[ticketId]?.userName ? (
+                          <span className="assigned-user" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <User size={14} />
-                            {assignedUserName || `Usuario #${assignedUser}`}
+                            {ticketAssignments[ticketId].userName}
+                            {(isAdmin || isTechnician) && (
+                              <button
+                                className="btn-quick-assign"
+                                onClick={() => openQuickAssign(ticketId)}
+                                title="Cambiar asignación"
+                                style={{ marginLeft: '4px' }}
+                              >
+                                <UserPlus size={12} />
+                              </button>
+                            )}
+                          </span>
+                        ) : ticketAssignments[ticketId]?.groupName ? (
+                          <span className="assigned-group" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Users size={14} />
+                            {ticketAssignments[ticketId].groupName}
+                            {(isAdmin || isTechnician) && (
+                              <button
+                                className="btn-quick-assign"
+                                onClick={() => openQuickAssign(ticketId)}
+                                title="Cambiar asignación"
+                                style={{ marginLeft: '4px' }}
+                              >
+                                <UserPlus size={12} />
+                              </button>
+                            )}
                           </span>
                         ) : (
                           <span className="unassigned">
@@ -603,7 +995,7 @@ export default function TicketList() {
                             {(isAdmin || isTechnician) && (
                               <button
                                 className="btn-quick-assign"
-                                onClick={() => setShowQuickAssign(ticketId)}
+                                onClick={() => openQuickAssign(ticketId)}
                                 title="Asignar"
                               >
                                 <UserPlus size={14} />
@@ -627,7 +1019,7 @@ export default function TicketList() {
                         {(isAdmin || isTechnician) && (
                           <button
                             className="btn btn-sm btn-icon"
-                            onClick={() => setShowQuickAssign(ticketId)}
+                            onClick={() => openQuickAssign(ticketId)}
                             title="Asignar"
                           >
                             <UserPlus size={14} />
@@ -683,23 +1075,7 @@ export default function TicketList() {
               </button>
             </div>
             <div className="modal-body">
-              <div className="form-group">
-                <label>
-                  <User size={16} />
-                  Técnico
-                </label>
-                <select
-                  value={quickAssignTech}
-                  onChange={(e) => setQuickAssignTech(e.target.value)}
-                >
-                  <option value="">-- Seleccionar técnico --</option>
-                  {technicians.map((tech) => (
-                    <option key={tech.id} value={tech.id}>
-                      {tech.name} {tech.realname ? `(${tech.realname})` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {/* Grupo primero */}
               <div className="form-group">
                 <label>
                   <Users size={16} />
@@ -707,12 +1083,41 @@ export default function TicketList() {
                 </label>
                 <select
                   value={quickAssignGroup}
-                  onChange={(e) => setQuickAssignGroup(e.target.value)}
+                  onChange={(e) => handleQuickGroupChange(e.target.value)}
                 >
                   <option value="">-- Seleccionar grupo --</option>
                   {groups.map((group) => (
                     <option key={group.id} value={group.id}>
-                      {group.name}
+                      {group.completename || group.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {/* Técnico después */}
+              <div className="form-group">
+                <label>
+                  <User size={16} />
+                  Técnico
+                  {quickAssignGroup && filteredTechnicians.length > 0 && (
+                    <span style={{ fontSize: '11px', color: '#666', marginLeft: 8 }}>
+                      ({filteredTechnicians.length} del grupo)
+                    </span>
+                  )}
+                </label>
+                <select
+                  value={quickAssignTech}
+                  onChange={(e) => setQuickAssignTech(e.target.value)}
+                >
+                  <option value="">
+                    {quickAssignGroup
+                      ? filteredTechnicians.length > 0
+                        ? '-- Seleccionar técnico del grupo --'
+                        : '-- No hay técnicos en este grupo --'
+                      : '-- Seleccionar técnico --'}
+                  </option>
+                  {filteredTechnicians.map((tech) => (
+                    <option key={tech.id} value={tech.id}>
+                      {tech.realname ? `${tech.realname} ${tech.firstname || ''}`.trim() : tech.name}
                     </option>
                   ))}
                 </select>

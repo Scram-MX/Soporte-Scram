@@ -4,7 +4,7 @@
 cat <<EOF > /usr/share/nginx/html/config.js
 window.RUNTIME_CONFIG = {
   GLPI_URL: "${VITE_GLPI_URL:-https://glpi.scram2k.com}",
-  GLPI_APP_TOKEN: "${VITE_GLPI_APP_TOKEN:-}",
+  GLPI_APP_TOKEN: "${VITE_GLPI_APP_TOKEN:-***GLPI_APP_TOKEN_REMOVED***}",
   GLPI_USER_TOKEN: "${VITE_GLPI_USER_TOKEN:-}"
 };
 EOF

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -6,9 +6,20 @@ import Dashboard from './pages/Dashboard';
 import TicketList from './pages/TicketList';
 import TicketCreate from './pages/TicketCreate';
 import TicketDetail from './pages/TicketDetail';
+import TicketEdit from './pages/TicketEdit';
 import MyTickets from './pages/MyTickets';
 import KanbanBoard from './pages/KanbanBoard';
+import ChangePassword from './pages/ChangePassword';
+import AIChat from './pages/AIChat';
 import './App.css';
+
+// Wrapper que fuerza remontaje cuando cambia la URL completa (path + query)
+function IndependentRoute({ children }) {
+  const location = useLocation();
+  // Usar path + search como key para que cada combinación sea independiente
+  const routeKey = location.pathname + location.search;
+  return <div key={routeKey}>{children}</div>;
+}
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated, loading } = useAuth();
@@ -61,7 +72,9 @@ function AppRoutes() {
         path="/tickets"
         element={
           <ProtectedRoute>
-            <TicketList />
+            <IndependentRoute>
+              <TicketList />
+            </IndependentRoute>
           </ProtectedRoute>
         }
       />
@@ -90,10 +103,34 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/tickets/:id/edit"
+        element={
+          <ProtectedRoute>
+            <TicketEdit />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/kanban"
         element={
           <ProtectedRoute>
             <KanbanBoard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/change-password"
+        element={
+          <ProtectedRoute>
+            <ChangePassword />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/ai-chat"
+        element={
+          <ProtectedRoute>
+            <AIChat />
           </ProtectedRoute>
         }
       />
