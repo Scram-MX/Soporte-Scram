@@ -11,10 +11,10 @@ import axios from 'axios';
 
 const CONFIG = {
   glpi: {
-    url: 'https://glpi.scram2k.com/apirest.php',
-    appToken: '***GLPI_APP_TOKEN_REMOVED***',
-    username: 'glpi',
-    password: 'glpi',
+    url: process.env.GLPI_URL || 'https://glpi.scram2k.com/apirest.php',
+    appToken: process.env.GLPI_APP_TOKEN || '',
+    username: process.env.GLPI_USERNAME || '',
+    password: process.env.GLPI_PASSWORD || '',
   }
 };
 
